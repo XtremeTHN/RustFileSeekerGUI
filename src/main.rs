@@ -1,68 +1,85 @@
-use adw::{ApplicationWindow, ActionRow, EntryRow, HeaderBar, prelude::*};
-use gtk::{Application, ListBox, Box, Orientation, Entry, ProgressBar, Label, Button, glib};
+use adw::{ApplicationWindow, EntryRow, HeaderBar, prelude::*};
+use gtk::{Application, ListBox, ListStore, Box as GtkBox, Orientation, ProgressBar, Label, Button, TreeView, glib, Notebook, ListView};
 use log::{info, error, debug};
+use std::path::PathBuf;
 use std::thread;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-mod setup; mod finder;
+mod setup; mod finder; mod stated;
 
 use glib::Sender;
-use glib::Receiver;
-use glib::MainContext;
-use glib::idle_add;
+
+
+
 
 use finder::Finder;
 
+enum SendTypes {
+    VectorValue(Vec<PathBuf>),
+    Bool(bool),
+}
+
 struct Callbacks {
-    window: ApplicationWindow,
-    gtk_box: Box,
+    gtk_box: GtkBox,
+    nb: Notebook,
     path: String,
     exts: String,
+}
+
+fn append_text_column(tree: &gtk::TreeView, title: &str, col: i32) {
+    let column = gtk::TreeViewColumn::builder()
+        .title(title)
+        .build();
+    let cell = gtk::CellRendererText::new();
+
+    column.pack_start(&cell, true);
+    column.add_attribute(&cell, "text", col);
+    tree.append_column(&column);
 }
 
 #[derive(Clone)]
 struct ProgressAnimate {
     flag: Arc<bool>,
-    sender: Sender<bool>,
+    should_exit: Arc<AtomicBool>,
+    sender: Sender<SendTypes>,
 }
 impl ProgressAnimate {
-    fn new(sender: Sender<bool>) -> Self {
-        ProgressAnimate { flag: Arc::new(true), sender: sender }
+    fn new(sender: Sender<SendTypes>) -> Self {
+        ProgressAnimate { flag: Arc::new(true), should_exit: Arc::new(AtomicBool::new(false)), sender: sender }
     }
 
     fn animate_progress(&mut self, path: String, extensions: String) {
-        let mut self_clone = self.clone();
+        let self_clone = self.clone();
         
-        let should_exit = Arc::new(AtomicBool::new(false));
-        
-        let find_thread = {
-            let should_exit = Arc::clone(&should_exit);
+        let _find_thread = {
+            let should_exit = Arc::clone(&self.should_exit);
             thread::spawn(move || {
                 while !should_exit.load(Ordering::Relaxed) {
-                    self_clone.sender.send(true);
+                    self_clone.sender.send(SendTypes::Bool(true));
                     thread::sleep(std::time::Duration::from_millis(700));
                 
                     if should_exit.load(Ordering::Relaxed) {
-                        self_clone.sender.send(false);
+                        self_clone.sender.send(SendTypes::Bool(false));
                         break;
                     }
                 }
             });
         };
-        find(path, extensions);
-        
-        should_exit.store(true, Ordering::Relaxed);
+        let files = find(path, extensions);
+        self.should_exit.store(true, Ordering::Relaxed);
+        self.sender.send(SendTypes::VectorValue(files));
     }
 }
 
-fn find(path: String, extensions: String) {
+fn find(path: String, extensions: String) -> Vec<PathBuf>{
     debug!("{} {}", path, extensions);
     let mut find_obj = Finder::new(path, extensions);
-    println!("{:?}", find_obj.find());
+    find_obj.find();
+    find_obj.get_all()
 }
 
 impl Callbacks {
-    fn new(window: ApplicationWindow, gtk_box: Box, path: String, exts: String) -> Self {
-        Callbacks { window: window, gtk_box: gtk_box, path: path, exts: exts }
+    fn new(gtk_box: GtkBox, path: String, exts: String, nb: Notebook) -> Self {
+        Callbacks { gtk_box: gtk_box, path: path, exts: exts, nb: nb }
     }
 
 
@@ -83,21 +100,75 @@ impl Callbacks {
 
         let box_clone = self.gtk_box.clone();
         let prog_clone = prog.clone();
+
+        let nb_clone = self.nb.clone();
         receiver.attach(None, move |msg| {
 
             // Actualiza el widget con los datos recibidos del hilo secundario
-            if msg {
-                // La tarea está en progreso, utiliza pulse() para mostrar una animación de progreso continuo
-                prog.pulse();
-            } else {
-                // La tarea ha finalizado, establece la barra de progreso en 100% (1.0)
-                box_clone.remove(&prog_clone);
+            match msg {
+                SendTypes::Bool(_) => {
+                    prog.pulse();
+                    glib::Continue(true)
+                }
+                SendTypes::VectorValue(vec_files) => {
+                    let nb_box = build_page2(vec_files);
+                    let placeholder_label = Label::builder()
+                        .use_markup(true)
+                        .label("<b>Input set</b>")
+                        .build();
+
+                    nb_clone.append_page(&nb_box, Some(&placeholder_label));
+                    nb_clone.next_page();
+                    box_clone.remove(&prog_clone);
+                    glib::Continue(false)
+                }
             }
-            glib::Continue(msg)
-            
         });
-        
     }
+}
+
+fn build_page2(files: Vec<PathBuf>) -> GtkBox {
+
+    let scrolled_window = gtk::ScrolledWindow::builder()
+            .margin_top(12)
+            .margin_end(12)
+            .margin_bottom(12)
+            .margin_start(12)
+            .build();
+
+    let page2_box = GtkBox::builder()
+        .margin_bottom(20)
+        .margin_end(20)
+        .margin_start(20)
+        .margin_top(20)
+        .orientation(Orientation::Vertical)
+        .build();
+
+    let label = Label::builder()
+        .use_markup(true)
+        .label("<b>Results</b>")
+        .build();
+
+    let stated_obj = stated::Stated::new();
+    stated_obj.stat_and_insert(files);
+    let list_store = stated_obj.get_liststore();
+    let treeview = TreeView::builder()
+        .model(&list_store)
+        .vexpand(true)
+        .build();
+
+    let cols = vec!["Name", "Extension", "Path", "Total Size", "Date of modification"];
+
+    for (pos, col) in cols.iter().enumerate() {
+        append_text_column(&treeview, col, pos as i32);
+    };
+
+    scrolled_window.set_child(Some(&treeview));
+
+    page2_box.append(&label);
+    page2_box.append(&scrolled_window);
+
+    page2_box
 }
 
 fn main() {
@@ -129,97 +200,112 @@ fn main() {
             .show_tabs(false)
             .show_border(false)
             .build();
-
-        let main_box = Box::new(Orientation::Vertical, 0);
-        let widgets_box = Box::builder()
-            .margin_bottom(20)
-            .margin_end(20)
-            .margin_start(20)
-            .margin_top(20)
-            .orientation(Orientation::Vertical)
-            .build();
         
+        // START PAGE 1
+            let main_box = GtkBox::new(Orientation::Vertical, 0);
+            let widgets_box = GtkBox::builder()
+                .margin_bottom(20)
+                .margin_end(20)
+                .margin_start(20)
+                .margin_top(20)
+                .orientation(Orientation::Vertical)
+                .build();
+            
 
-        let header = HeaderBar::builder()
-            .title_widget(&adw::WindowTitle::new("FinderGUI", "The newest Finder GUI"))
-            .build();
+            let header = HeaderBar::builder()
+                .title_widget(&adw::WindowTitle::new("FinderGUI", "The newest Finder GUI"))
+                .build();
 
-        let placeholder_label = Label::builder()
-            .use_markup(true)
-            .label("<b>Input set</b>")
-            .build();
+            let placeholder_label = Label::builder()
+                .use_markup(true)
+                .label("<b>Input set</b>")
+                .build();
 
-        let input_list_box = ListBox::builder()
-            .margin_top(22)
-            .margin_end(22)
-            .margin_bottom(10)
-            .margin_start(22)
-            // the content class makes the list look nicer
-            .css_classes(vec![String::from("content")])
-            .build();
+            let input_list_box = ListBox::builder()
+                .margin_top(22)
+                .margin_end(22)
+                .margin_bottom(10)
+                .margin_start(22)
+                // the content class makes the list look nicer
+                .css_classes(vec![String::from("content")])
+                .build();
 
-        // let exts_row = ActionRow::builder()
-        //     .activatable(true)
-        //     .selectable(false)
-        //     .title("Extensions")
-        //     .subtitle("Choose from a list the ext category, or create new category by writing and separating the extensions with this character |")
-        //     .build();
-        let exts_entry_row = EntryRow::builder()
-            .activatable(true)
-            .selectable(false)
-            .title("Extensions (Separated by | )")
-            .build();
+            // let exts_row = ActionRow::builder()
+            //     .activatable(true)
+            //     .selectable(false)
+            //     .title("Extensions")
+            //     .subtitle("Choose from a list the ext category, or create new category by writing and separating the extensions with this character |")
+            //     .build();
+            let exts_entry_row = EntryRow::builder()
+                .activatable(true)
+                .selectable(false)
+                .title("Extensions (Separated by | )")
+                .build();
 
-        let directory_entry_row = EntryRow::builder()
-            .activatable(true)
-            .selectable(false)
-            .title("Find path")
-            .build();
+            let directory_entry_row = EntryRow::builder()
+                .activatable(true)
+                .selectable(false)
+                .title("Find path")
+                .build();
 
-        let btt_box = Box::builder()
-            .margin_bottom(26)
-            .margin_end(26)
-            .margin_start(26)
-            .margin_top(26)
-            .homogeneous(true)
-            .spacing(3)
-            .build();
+            let btt_box = GtkBox::builder()
+                .margin_bottom(26)
+                .margin_end(26)
+                .margin_start(26)
+                .margin_top(26)
+                .homogeneous(true)
+                .spacing(3)
+                .build();
 
-        let browse_path_btt = Button::builder()
-            .label("Select a specific path")
-            .hexpand_set(true)
-            .vexpand_set(true)
-            .build();
-        let find_btt = Button::builder()
-            .label("Find")
-            .hexpand_set(true)
-            .vexpand_set(true)
-            .build();
+            let browse_path_btt = Button::builder()
+                .label("Select a specific path")
+                .hexpand_set(true)
+                .vexpand_set(true)
+                .build();
+            let find_btt = Button::builder()
+                .label("Find")
+                .hexpand_set(true)
+                .vexpand_set(true)
+                .build();
 
-        let der_clone = directory_entry_row.clone();
-        let eer = exts_entry_row.clone();
-        let win = window.clone();
-        let mb = main_box.clone();
-        find_btt.connect_clicked(move |_| {
-            let cbs = Callbacks::new(win.clone(), mb.clone(), der_clone.text().to_string(), eer.text().to_string());
-            cbs.find_btt_callback();
-        });
+            let der_clone = directory_entry_row.clone();
+            let eer = exts_entry_row.clone();
+            let mb = main_box.clone();
+            let nb = notebook.clone();
+            find_btt.connect_clicked(move |_| {
+                let cbs = Callbacks::new(mb.clone(), der_clone.text().to_string(), eer.text().to_string(), nb.clone());
+                cbs.find_btt_callback();
+            });
 
-        btt_box.append(&browse_path_btt);
-        btt_box.append(&find_btt);
-        
-        input_list_box.append(&exts_entry_row);
-        input_list_box.append(&directory_entry_row);
+            btt_box.append(&browse_path_btt);
+            btt_box.append(&find_btt);
+            
+            input_list_box.append(&exts_entry_row);
+            input_list_box.append(&directory_entry_row);
 
-        widgets_box.append(&placeholder_label);
-        widgets_box.append(&input_list_box);
-        widgets_box.append(&btt_box);
+            widgets_box.append(&placeholder_label);
+            widgets_box.append(&input_list_box);
+            widgets_box.append(&btt_box);
+        // ENF OF PAGE 1
         
         main_box.append(&header);
 
         let placeholder_label = Label::new(Some("Main Page"));
 
         notebook.append_page(&widgets_box, Some(&placeholder_label));
+
+        // THE START OF THE PAGE 2 IS IN THE CALLBACK STRUCT
+        // START OF PAGE 2
+
+            // ^
+            // |
+            // |
+            // PAGE 2 STARTS AT LINE 102 IN THE FUNCTION build_page2()
+
+        // END OF PAGE 2
+
+        let placeholder_label = Label::new(Some("Main Page"));
+
         main_box.append(&notebook);
 
         window.set_content(Some(&main_box));

@@ -6,7 +6,7 @@ use serde::{Serialize, Deserialize};
 use serde_yaml;
 use log::{info, error};
 
-use simplelog::{CombinedLogger, ConfigBuilder, LevelFilter, TermLogger, WriteLogger, TerminalMode, ColorChoice, Config};
+use simplelog::{CombinedLogger, LevelFilter, TermLogger, WriteLogger, TerminalMode, ColorChoice, Config};
 
 #[derive(Serialize, Deserialize)]
 pub struct YamlConfiguration {
@@ -17,11 +17,6 @@ pub struct YamlConfiguration {
 pub struct LogsConfigurations {
     write_to_stdout: bool,
     write_to_file: bool,
-}
-
-enum LoggerType {
-    WriteLogger(LevelFilter, Config, String),
-    TermLogger(LevelFilter, Config, TerminalMode, ColorChoice),
 }
 
 pub fn setup() -> () {

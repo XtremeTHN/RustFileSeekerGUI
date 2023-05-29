@@ -1,6 +1,6 @@
 use walkdir::WalkDir;
 use std::path::PathBuf;
-use serde::Deserialize;
+
 use std::collections::HashMap;
 
 
@@ -43,6 +43,17 @@ impl Finder {
             return Err(());
         }
         Ok(files_by_ext)
+    }
+
+    pub fn get_all(&self) -> Vec<PathBuf> {
+        // if let Some(vec) = self.all.clone() {
+        //     vec.into_iter()
+        //     .map(|pb| pb.into_os_string().into_string().unwrap())
+        //     .collect()
+        // } else {
+        //     vec![]
+        // }
+        self.all.clone().unwrap()
     }
     
     pub fn filter(&mut self, keyword: &str) -> Vec<PathBuf> {
