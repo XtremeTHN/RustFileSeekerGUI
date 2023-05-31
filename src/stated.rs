@@ -1,9 +1,11 @@
 use adw::prelude::*;
-use log::debug;
+use log::{debug, error};
 use std::{time::SystemTime, path::PathBuf};
 use chrono::{DateTime, Local};
 use std::fs;
 use gtk;
+
+use crate::setup::YamlConfiguration;
 
 fn convert_bytes_to_human_readable(bytes: u64) -> String {
     if bytes < 1024 {
@@ -16,20 +18,20 @@ fn convert_bytes_to_human_readable(bytes: u64) -> String {
     return format!("{:.1} {}B", bytes as f64 / 1024.0_f64.powi(exp * 10), unit);
 }
 
-#[derive(Debug)]
 pub struct Stated {
     liststore: gtk::ListStore,
+    configs: YamlConfiguration,
 }
 
 impl Stated {
-    pub fn new() -> Stated {
+    pub fn new(configs: YamlConfiguration) -> Stated {
         Stated {liststore: gtk::ListStore::new(&[
             String::static_type(),
             String::static_type(),
             String::static_type(),
             String::static_type(),
             String::static_type(),
-        ])}
+        ]), configs: configs }
     }
 
     pub fn get_liststore(&self) -> gtk::ListStore{
@@ -45,10 +47,22 @@ impl Stated {
         )
     }
 
-    pub fn stat_and_insert(&self, files: Vec<PathBuf>) {
+    pub fn stat_and_insert(&self, files: Vec<PathBuf>) -> Result<(), String> {
         debug!("Getting information of {} files", files.len());
-        for (index, file) in files.iter().enumerate() {
-            let metadata = fs::metadata(file.as_path().to_string_lossy().to_string()).unwrap();
+        for (_, file) in files.iter().enumerate() {
+            let metadata = fs::metadata(file.as_path().to_string_lossy().to_string());
+
+            if let Err(err) = metadata {
+                if !self.configs.general.skip_metadata_errors {
+                    error!("Error while trying to get metadata of the file {}. Error message: {}", file.as_path().to_string_lossy(), err);
+                    return Err(format!("Cannot get information of one file {}", file.as_path().to_string_lossy()));
+                } else {
+                    return Ok(());
+                }
+            }
+
+            let metadata = metadata.unwrap();
+
             let modified_time = metadata.modified().unwrap();
             let system_time = SystemTime::UNIX_EPOCH + modified_time.duration_since(SystemTime::UNIX_EPOCH).unwrap();
             let datetime: DateTime<Local> = DateTime::from(system_time);
@@ -68,6 +82,6 @@ impl Stated {
             ]);
             
         }
-        
+        Ok(())
     }
 }

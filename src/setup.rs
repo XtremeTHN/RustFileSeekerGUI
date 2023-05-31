@@ -4,19 +4,32 @@ use std::io::{Read,Write};
 use chrono::Utc;
 use serde::{Serialize, Deserialize};
 use serde_yaml;
-use log::{info, error};
+use log::{error};
 
 use simplelog::{CombinedLogger, LevelFilter, TermLogger, WriteLogger, TerminalMode, ColorChoice, Config};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct YamlConfiguration {
-    logs_configurations: LogsConfigurations,
+    pub logs_configurations: LogsConfigurations,
+    pub interface_configurations: UIConfigurations,
+    pub general: GeneralConfigs,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct LogsConfigurations {
-    write_to_stdout: bool,
-    write_to_file: bool,
+    pub write_to_stdout: bool,
+    pub write_to_file: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct UIConfigurations {
+    pub enable_adw: bool,
+    pub color_scheme: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct GeneralConfigs {
+    pub skip_metadata_errors: bool,
 }
 
 pub fn setup() -> () {
@@ -35,13 +48,13 @@ pub fn setup() -> () {
     preferences_file.push("preferences.yml");
 
     if let Err(err) = create_dir_all(log_dir.clone()) {
-        println!("Couldn't initialize log file");
-        eprintln!("{}", err);
+        error!("Couldn't initialize log file");
+        error!("{}", err);
         ()
     }
     if let Err(err) = create_dir_all(config_dir.clone()) {
-        println!("Couldn't initialize log file");
-        eprintln!("{}", err);
+        error!("Couldn't initialize log file");
+        error!("{}", err);
         ()
     }
 
@@ -53,20 +66,27 @@ pub fn setup() -> () {
                     write_to_file: true, 
                 };
 
+
+                let user_interface_base_config = UIConfigurations { enable_adw: true, color_scheme: String::from("dark") };
+
+                let gen_confs = GeneralConfigs { skip_metadata_errors: false };
+
                 let general_conf = YamlConfiguration {
                     logs_configurations: logger_conf,
+                    interface_configurations: user_interface_base_config,
+                    general: gen_confs,
                 };
 
                 let conf_yaml = serde_yaml::to_string(&general_conf);
                 if let Err(err) = file.write_all(conf_yaml.unwrap().as_bytes()) {
-                    println!("Couldn't initialize log file");
-                    eprintln!("{}", err);
+                    error!("Couldn't initialize log file");
+                    error!("{}", err);
                     ()
                 }
             }
             Err(err) => {
-                println!("Couldn't initialize log file");
-                eprintln!("{}", err);
+                error!("Couldn't initialize log file");
+                error!("{}", err);
                 ()
             }
         }
@@ -93,14 +113,14 @@ pub fn setup() -> () {
 
             // Combinar ambos loggers
             if let Err(err) = CombinedLogger::init(loggers) {
-                println!("Couldn't initialize log file");
-                eprintln!("Error: {}", err);
+                error!("Couldn't initialize log file");
+                error!("{}", err);
                 ()
             };
         }
         Err(err) => {
-            println!("Couldn't initialize log file");
-            eprintln!("Error: {}", err);
+            error!("Couldn't initialize log file");
+            error!("{}", err);
             ()
         }
     }
@@ -108,10 +128,12 @@ pub fn setup() -> () {
 
 pub fn load_conf() -> YamlConfiguration {
     let base_dir = ProjectDirs::from("", "", "FinderModernGUI");
+    let default_values = YamlConfiguration { logs_configurations: LogsConfigurations { write_to_stdout: false, write_to_file: true }, interface_configurations: UIConfigurations { enable_adw: true, color_scheme: String::from("dark") }, general: GeneralConfigs { skip_metadata_errors: false } };
+
     if base_dir.is_none() {
-        info!("Couldn't read config file. Defaulting config values...");
-        error!("Base dir object is null");
-        return YamlConfiguration { logs_configurations: LogsConfigurations { write_to_stdout: false, write_to_file: true } };
+        eprintln!("Couldn't read config file. Defaulting config values...");
+        eprintln!("Base dir object is null");
+        return default_values;
     } else {
         let mut config_dir = base_dir.clone().unwrap().config_dir().to_path_buf();
         config_dir.push("preferences.yml");
@@ -121,21 +143,21 @@ pub fn load_conf() -> YamlConfiguration {
                 let mut buffer = String::new();
                 let content = file.read_to_string(&mut buffer);
                 if let Err(err) = content {
-                    info!("Couldn't read config file. Defaulting config values...");
-                    error!("Canno't read config file: {}", err);
-                    return YamlConfiguration { logs_configurations: LogsConfigurations { write_to_stdout: false, write_to_file: true } };
+                    eprintln!("Couldn't read config file. Defaulting config values...");
+                    eprintln!("Canno't read config file: {}", err);
+                    return default_values;
                 }
                 let confs: YamlConfiguration = serde_yaml::from_str(&buffer).unwrap_or_else(|err| {
-                    info!("Couldn't read config file. Defaulting config values...");
-                    error!("{}", err);
-                    return YamlConfiguration { logs_configurations: LogsConfigurations { write_to_stdout: false, write_to_file: true } };
+                    eprintln!("Couldn't read config file. Defaulting config values...");
+                    eprintln!("{}", err);
+                    return default_values;
                 });
                 return confs;
             }
             Err(err) => {
-                info!("Couldn't read config file. Defaulting config values...");
-                error!("Canno't open config file: {}", err);
-                return YamlConfiguration { logs_configurations: LogsConfigurations { write_to_stdout: false, write_to_file: true } };
+                eprintln!("Couldn't read config file. Defaulting config values...");
+                eprintln!("Canno't open config file: {}", err);
+                return default_values;
             }
         }
     }
