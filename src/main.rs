@@ -1,6 +1,6 @@
 use adw::{ApplicationWindow, EntryRow, HeaderBar, prelude::*};
 use gtk::{Application, ListBox, Box as GtkBox, Orientation, ProgressBar, Label, Button, TreeView, glib, Notebook};
-use log::{info, error, debug};
+use log::{info, error};
 use std::path::PathBuf;
 use std::thread;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
@@ -53,15 +53,15 @@ impl ProgressAnimate {
             thread::spawn(move || {
                 while !should_exit.load(Ordering::Relaxed) {
                     self_clone.sender.send(SendTypes::Bool(true)).unwrap_or_else(|err| {
-                        error!("Error while sending continue signal to the main thread!. Error: {}", err);
-                        info!("Create a new issue in the github page");
+                        error!("main::ProgressAnimate: Error while sending continue signal to the main thread!. Error: {}", err);
+                        info!("main::ProgressAnimate: Create a new issue in the github page");
                     });
                     thread::sleep(std::time::Duration::from_millis(700));
                 
                     if should_exit.load(Ordering::Relaxed) {
                         self_clone.sender.send(SendTypes::Bool(false)).unwrap_or_else(|err| {
-                            error!("Error while sending continue signal to the main thread!. Error: {}", err);
-                            info!("Create a new issue in the github page");
+                            error!("main::ProgressAnimate: Error while sending continue signal to the main thread!. Error: {}", err);
+                            info!("main::ProgressAnimate: Create a new issue in the github page");
                         });
                         break;
                     }
@@ -72,15 +72,15 @@ impl ProgressAnimate {
         if let Err(err) = files.clone() {
             self.should_exit.store(true, Ordering::Relaxed);
             self.sender.send(SendTypes::Error(err)).unwrap_or_else(|err| {
-                error!("Error while sending continue signal to the main thread!. Error: {}", err);
-                info!("Create a new issue in the github page");
+                error!("main::ProgressAnimate: Error while sending continue signal to the main thread!. Error: {}", err);
+                info!("main::ProgressAnimate: Create a new issue in the github page");
             });
             ()
         } else {
             self.should_exit.store(true, Ordering::Relaxed);
             self.sender.send(SendTypes::VectorValue(files.unwrap())).unwrap_or_else(|err| {
-                error!("Error while sending continue signal to the main thread!. Error: {}", err);
-                info!("Create a new issue in the github page");
+                error!("main::ProgressAnimate: Error while sending continue signal to the main thread!. Error: {}", err);
+                info!("main::ProgressAnimate: Create a new issue in the github page");
             });
             ()
         }
@@ -88,7 +88,6 @@ impl ProgressAnimate {
 }
 
 fn find(path: String, extensions: String) -> Result<Vec<PathBuf>, String> {
-    debug!("{} {}", path, extensions);
     let mut find_obj = Finder::new(path, extensions);
     if let Err(_) = find_obj.find() {
         Err(String::from("No files founded in the specified dir"))
@@ -106,7 +105,7 @@ impl Callbacks {
     fn find_btt_callback(&self, transient_for: ApplicationWindow) {
         let prog = ProgressBar::new();
         self.gtk_box.append(&prog);
-        debug!("Creating glib channel...");
+        info!("main::Callbacks::find_bt_callback: Creating glib channel...");
         let (sender, receiver) = glib::MainContext::channel(glib::PRIORITY_DEFAULT);
         prog.pulse();
 
@@ -114,7 +113,7 @@ impl Callbacks {
         let path = self.path.clone();
         let exts = self.exts.clone();
 
-        info!("Finding files in another thread...");
+        info!("main::Callbacks::find_bt_callback: Finding files in another thread...");
         // Inicia el hilo secundario que actualiza el widget
         thread::spawn(move || {
             prog_cb.animate_progress(path, exts);
@@ -135,6 +134,7 @@ impl Callbacks {
                     glib::Continue(true)
                 }
                 SendTypes::VectorValue(vec_files) => {
+                    info!("main::Callbacks::find_bt_callback: Recivied list of files from another thread");
                     if let Ok(nb_box) = build_page2(vec_files, nb_clone.clone(), tf.clone()) {
                         let placeholder_label = Label::builder()
                             .use_markup(true)
@@ -148,11 +148,12 @@ impl Callbacks {
                     glib::Continue(false)
                 }
                 SendTypes::Error(err) => {
+                    info!("main::Callbacks::find_bt_callback: Recivied error from another thread. Error: {}", err);
                     let msg_diag = adw::MessageDialog::builder()
-                    .heading("Empty!")
-                    .body(&err)
-                    .transient_for(&tf.clone())
-                    .build();
+                        .heading("Empty!")
+                        .body(&err)
+                        .transient_for(&tf.clone())
+                        .build();
                     msg_diag.add_response("Ok", "Ok");
                     msg_diag.present();
                     box_clone.remove(&prog_clone);
@@ -228,39 +229,44 @@ fn build_page2(files: Vec<PathBuf>, nb: Notebook, transient_for: ApplicationWind
 
 fn main() {
     setup::setup();
-    info!("[root] Log initialized!");
-    info!("[root] Initializing gtk window");
+    info!("main: Log initialized!");
+    info!("main: Initializing gtk window");
 
     let app = Application::builder()
         .application_id("com.placeholder.finder")
         .build();
 
-    info!("Loading settings...");
+    info!("main: Loading settings...");
     let configs: setup::YamlConfiguration = setup::load_conf();
 
     let conf_clone = configs.clone();
     app.connect_startup(move |_| {
-        info!("[adw startup] Initializing adwaita...");
+        info!("Application::connect_startup: Initializing adwaita...");
         let theme = conf_clone.interface_configurations.color_scheme.clone();
         if conf_clone.interface_configurations.enable_adw {
             if let Err(err) = adw::init() {
-                error!("[adw startup] {}", err)
+                error!("{}", err)
             };
-            info!("[adw startup] Setting settings theme");
+            info!("Application::connect_startup: Applying settings theme");
             let adw_settings = adw::StyleManager::default();
+            let another_settings = gtk::Settings::default().unwrap();
             if theme == String::from("dark") {
                 adw_settings.set_color_scheme(adw::ColorScheme::ForceDark);
+                another_settings.set_gtk_error_bell(false);
             } else if theme == String::from("light") {
                 adw_settings.set_color_scheme(adw::ColorScheme::ForceLight);
+                another_settings.set_gtk_error_bell(false);
             }
         } else {
-            info!("[adw startup] Adwaita is disabled in the configuration");
-            info!("[adw startup] Setting settings theme");
+            info!("Application::connect_startup: Adwaita is disabled in the configuration");
+            info!("Application::connect_startup: Applying settings theme");
             let gtk_settings = gtk::Settings::default().unwrap();
             if theme == String::from("dark") {
                 gtk_settings.set_gtk_application_prefer_dark_theme(true);
+                gtk_settings.set_gtk_error_bell(false);
             } else if theme == String::from("light") {
                 gtk_settings.set_gtk_application_prefer_dark_theme(false);
+                gtk_settings.set_gtk_error_bell(false);
             }
         }
         
@@ -268,7 +274,7 @@ fn main() {
     });
 
     app.connect_activate(|app| {
-        debug!("[adw activation] Creating window");
+        info!("Application::connect_activate: Creating window");
         let window = ApplicationWindow::builder()
             .application(app)
             .default_width(600)
@@ -284,7 +290,7 @@ fn main() {
             .build();
 
         // START PAGE 1
-        debug!("Creating main page...");
+        info!("Application::connect_activate: Creating main page...");
             let main_box = GtkBox::new(Orientation::Vertical, 0);
             let widgets_box = GtkBox::builder()
                 .margin_bottom(20)
@@ -370,7 +376,7 @@ fn main() {
             widgets_box.append(&placeholder_label);
             widgets_box.append(&input_list_box);
             widgets_box.append(&btt_box);
-        debug!("Success!");
+        info!("Application::connect_activate: Success!");
         // ENF OF PAGE 1
         
         main_box.append(&header);
@@ -397,7 +403,7 @@ fn main() {
         window.show();
     });
 
-    debug!("Running app...");
+    info!("Running app...");
     app.run();
 }
 
